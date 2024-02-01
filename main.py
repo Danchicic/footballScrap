@@ -23,7 +23,7 @@ user = fake_useragent.UserAgent().random
 
 # collecting options
 options = webdriver.ChromeOptions()
-# options.add_argument("--headless")
+options.add_argument("--headless")
 options.add_argument(f"user-agent={user}")
 options.add_argument("--start-maximized")
 
