@@ -1,16 +1,17 @@
 import time
 import sqlite3
+from dataclasses import dataclass
 
 
+@dataclass
 class UserRow:
-    def __init__(self, user_id, user_name):
-        self.user_id = user_id
-        self.user_name = user_name
+    user_id: int
+    user_name: str
 
 
 class UserDataBase:
     def __init__(self):
-        self.conn = sqlite3.connect(database='../test_database.db')
+        self.conn = sqlite3.connect(database='./bot/db/test_database.db')
         self.cur = self.conn.cursor()
 
     def check_user(self, user: UserRow):

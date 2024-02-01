@@ -1,4 +1,2 @@
-def main():
-    pass
-
-main()
+from .handlers import *
+from .config import config

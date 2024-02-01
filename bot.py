@@ -1,11 +1,7 @@
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
-from config import config
-import handlers
-
-# main file of bot
-
+from bot import *
 
 token = config.tg_bot.token
 
@@ -37,3 +33,5 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+    # with open('./bot/db/12.txt') as f:
+    #     f.read()
