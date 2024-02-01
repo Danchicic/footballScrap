@@ -1,5 +1,12 @@
+from __future__ import annotations
+
 import re
 import time
+
+from bot.handlers.test_handler import send_forecast_to_channel
+from bot.my_types import ChannelAnswerType
+from .db import match_db
+from .db.database_controller import MatchRow
 
 import chromedriver_autoinstaller
 import fake_useragent
@@ -27,22 +34,28 @@ driver: webdriver = webdriver.Chrome(options=options)
 
 def open_main_page():
     driver.get(url="https://www.flashscorekz.com/?rd=flashscore.ru.com#!/")
-    driver.find_elements(By.CLASS_NAME, 'filters__tab')[1].click()
-    driver.implicitly_wait(1)
+
+    # click to live matches
+
+    # driver.find_elements(By.CLASS_NAME, 'filters__tab')[1].click()
+    # driver.implicitly_wait(1)
     time.sleep(1)
     # mute notifications
     try:
         s = driver.find_element(By.CLASS_NAME, 'tabs__sound')
-        ActionChains(driver).click(s).perform()
+        ActionChains(driver) \
+            .click(s) \
+            .perform()
         time.sleep(1)
     except Exception as ex:
-        print(ex)
         print("cant mute notifications")
 
 
 def accept_cookies():
     temp = driver.find_element(By.ID, 'onetrust-button-group')
-    ActionChains(driver).click(temp).perform()
+    ActionChains(driver) \
+        .click(temp) \
+        .perform()
 
 
 def open_countries():
@@ -60,7 +73,9 @@ def open_countries():
             print(ex)
 
         if 'показать игры' in country_arrow.text:
-            ActionChains(driver).click(country_arrow).perform()
+            ActionChains(driver) \
+                .click(country_arrow) \
+                .perform()
             driver.execute_script(f"window.scrollTo(0, {offset});")
             time.sleep(0.5)
             offset += 150
@@ -72,26 +87,37 @@ def open_countries():
 def open_every_match():
     offset = 500
     for match in driver.find_elements(By.CLASS_NAME, 'event__match'):
-        ActionChains(driver).click(match).perform()
+        match_id = match.get_attribute('id')
+        match_url = f"https://www.flashscorekz.com/match/{match_id}/#/match-summary"
+        match_db.write_data(MatchRow(match_id=match_id, match_url=match_url, team1='', team2=''))
+        ActionChains(driver) \
+            .click(match) \
+            .perform()
         driver.execute_script(f"window.scrollTo(0, {offset})")
         offset += 50
 
 
 def check_matches_for_needed_stat():
-    for handle in driver.window_handles:
-        driver.switch_to.window(handle)
-        ans = test(driver)
-        if ans == 'skip_window':
-            continue
-        elif ans is None:
-            pass
-        elif isinstance(ans, """my type"""):
-            pass
-            # await bot func
+    while 1:
+        for handle in driver.window_handles:
+            driver.switch_to.window(handle)
+            match_url = driver.current_url
+            match_id = match_url.split('/')[-4]
+            print(match_id)
+            ans = test(driver)
+            if ans == 'skip_window':
+                continue
+            elif ans is None:
+                match_db.delete_row_by_id(match_id=match_id)
+                pass
+            elif isinstance(ans, ChannelAnswerType):
+                print('Отправил сообщение в группу')
+                pass
 
 
-def test(driver):
-    '''getting page with match and returning statistic
+def test(driver) -> str | None | ChannelAnswerType:
+    '''
+    asking page with match and returning statistic
     '''
     f = 0
     # open statistic table
@@ -106,7 +132,9 @@ def test(driver):
 
     for button in all_buttons:
         if button.text == 'СТАТИСТИКА':
-            ActionChains(driver).click(button).perform()
+            ActionChains(driver) \
+                .click(button) \
+                .perform()
             f = 1
             break
     if f == 0:
@@ -121,10 +149,14 @@ def test(driver):
     for button in driver.find_elements(By.TAG_NAME, 'button'):
         if button.text == '2-Й ТАЙМ':
             # choosing second time
-            ActionChains(driver).click(button).perform()
+            ActionChains(driver) \
+                .click(button) \
+                .perform()
             break
         elif button.text == '1-Й ТАЙМ':
-            ActionChains(driver).click(button).perform()
+            ActionChains(driver) \
+                .click(button) \
+                .perform()
             """DELETE BREAK"""
             # saving now count
             now_team_count = soup.find('div', class_='detailScore__wrapper')
@@ -178,11 +210,22 @@ def test(driver):
     return "skip_window"
 
 
+# async def test():
+#     if 1:
+#         await send_forecast_to_channel(
+#             ChannelAnswerType('Germany', 'Bundesleague, Round 19', 'Union Berlin - Darmstadt', '0:0', "42'",
+#                               'Union Berlin'))
+
+
 def main():
+    # first block
     open_main_page()
     accept_cookies()
     open_countries()
+
+    # second block
     open_every_match()
+    # third block
     check_matches_for_needed_stat()
 
 

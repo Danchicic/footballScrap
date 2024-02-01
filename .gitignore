@@ -1,6 +1,10 @@
 venv
 todo list
 .idea/
+<<<<<<< HEAD
 requirements
 index.html
 test.py
+=======
+.env
+>>>>>>> badca5962bc2ff51d3a471a68fa2198e07583b5b
