@@ -24,9 +24,14 @@ class MatchesDataBaseCRUD:
         self.cur = self.con.cursor()
 
     def write_data(self, data: MatchRow):
-        self.cur.execute("""SELECT match_id FROM MatchProgressStat""")
+        self.cur.execute(f"""SELECT match_id FROM MatchProgressStat WHERE match_id='{data.match_id}'""")
         is_in = self.cur.fetchone()
         if is_in is not None:
+            self.cur.execute(f"""
+            UPDATE MatchProgressStat SET team1 ='{data.team1}', team2='{data.team2}',match_url='{data.match_url}' 
+            WHERE match_id='{data.match_id}'  
+            """)
+            self.con.commit()
             return
 
         self.cur.execute("""INSERT INTO MatchProgressStat(team1, team2, match_id, match_url) VALUES (?,?,?,?)""",
@@ -45,7 +50,7 @@ class MatchesDataBaseCRUD:
         return self.cur.fetchone()
 
     def write_new_match(self, match_id):
-        self.cur.execute("""SELECT match_id FROM MatchProgressStat""")
+        self.cur.execute(f"""SELECT match_id FROM MatchProgressStat WHERE match_id={match_id}""")
         if self.cur.fetchone() is not None:
             return
         self.cur.execute(f"""
@@ -54,11 +59,9 @@ class MatchesDataBaseCRUD:
         self.con.commit()
 
     def update_status(self, data: MatchStat):
-        self.cur.execute(f"""SELECT match_id FROM MatchProgressStat WHERE match_id='{data.match_id}'; """)
+        self.cur.execute(f"""SELECT match_id FROM MatchProgressStat WHERE match_id='{data.match_id}'""")
         is_id = self.cur.fetchone()
-        # print("id id already in table", is_id, data.match_id)
         if is_id is None:
-            # print("Inserting")
             self.cur.execute(f"""
             INSERT INTO MatchProgressStat(match_id, status) VALUES (?,?)
             """, (data.match_id, data.status))
@@ -69,12 +72,14 @@ class MatchesDataBaseCRUD:
         SELECT status FROM MatchProgressStat WHERE match_id='{data.match_id}'
         """)
         is_first_time_stat = self.cur.fetchone()
-        # print(is_first_time_stat, "status of", data.match_id)
         if is_first_time_stat is not None and is_first_time_stat[0] == 'first_time_stat':
             return
 
         self.cur.execute(f"""
-        UPDATE MatchProgressStat SET status='{data.status}' WHERE match_id='{data.match_id}'
+        UPDATE MatchProgressStat 
+        SET status='{data.status}', team1_count={data.team1_count}, 
+                        team2_count={data.team2_count}
+         WHERE match_id='{data.match_id}'
         """)
         self.con.commit()
 
@@ -104,6 +109,10 @@ class MatchesDataBaseCRUD:
         SELECT status FROM MatchProgressStat WHERE match_id='{match_id}'
         """)
         return self.cur.fetchone()
+
+    def get_urls(self):
+        self.cur.execute("""SELECT match_url FROM MatchProgressStat""")
+        return self.cur.fetchall()
 
 
 if __name__ == '__main__':

@@ -1,31 +1,30 @@
 from __future__ import annotations
+import re
 
 import asyncio
-import random
-import re
 import time
 
+from update_database import delete_past_rows
 from bot.handlers.test_handler import send_forecast_to_channel
 from bot.my_types import ChannelAnswerType
 from scrapper.db import match_db
 from scrapper.db.database_controller import MatchRow, MatchStat
 
 import chromedriver_autoinstaller
-import fake_useragent
 from bs4 import BeautifulSoup
 from selenium import webdriver
-from selenium.common import NoSuchElementException, ElementNotInteractableException
+from selenium.common import NoSuchElementException, ElementNotInteractableException, StaleElementReferenceException
 from selenium.webdriver import ActionChains
 from selenium.webdriver.common.by import By
 
 # generate fake useragent
-user = fake_useragent.UserAgent().random
-
+# user = fake_useragent.UserAgent().random
+user = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
 # collecting options
 options = webdriver.ChromeOptions()
 options.add_argument("--headless")
 options.add_argument(f"user-agent={user}")
-options.add_argument("--start-maximized")
+# options.add_argument("--start-maximized")
 
 # downloading webdriver
 chromedriver_autoinstaller.install()
@@ -34,7 +33,9 @@ chromedriver_autoinstaller.install()
 driver: webdriver = webdriver.Chrome(options=options)
 # global consts
 original_window: str = ''
-start_unix = 0
+start_unix = time.time()
+
+DEBUG = False
 
 
 def open_main_page(url='https://www.flashscorekz.com/?rd=flashscore.ru.com#!/'):
@@ -78,13 +79,33 @@ def open_countries():
             .click(clickable) \
             .perform()
         time.sleep(1)
+    # double check
+    for clickable in driver.find_elements(By.CLASS_NAME, '_simpleText_1d7gd_5'):
+        ActionChains(driver) \
+            .click(clickable) \
+            .perform()
+        time.sleep(1)
+    # print("clicked")
+
+
+def get_match_id_from_url(match_url):
+    spl = match_url.split('/')
+    i1 = spl.index('#')
+    return spl[i1 - 1]
 
 
 def open_every_match():
-    print("iam calling", 'open matches')
     offset = 500
     for match in driver.find_elements(By.CLASS_NAME, 'event__match'):
-        match_id = match.get_attribute('id').split('_')[-1]
+        try:
+            match_id = match.get_attribute('id').split('_')[-1]
+        except Exception:
+            driver.switch_to.window(original_window)
+            if DEBUG:
+                with open(f'index_exception_{time.time()}.html', 'w+') as html_file:
+                    html_file.write(str(driver.page_source))
+            continue
+
         res = match_db.check_match_id(match_id)
         if res is not None and res[0] == 'nostat':
             continue
@@ -100,21 +121,23 @@ def open_every_match():
             continue
 
         match_url = f"https://www.flashscorekz.com/match/{match_id}/#/match-summary"
-        match_db.write_data(MatchRow(match_id=match_id, match_url=match_url, team1=team1_name, team2=team2_name))
-        print(team1_name, match_id, match_url)
+        if team1_name == 'ГОЛ':
+            if DEBUG:
+                with open("Гол error", 'w+') as new_f:
+                    new_f.write(
+                        f"{team1_name} - {team2_name}\n{match.find_elements(By.CLASS_NAME, 'event__participant')}")
+
+            # match_db.write_data(MatchRow(match_id=match_id, match_url=match_url, team1=team1_name, team2=team2_name))
+        else:
+            match_db.write_data(MatchRow(match_id=match_id, match_url=match_url, team1=team1_name, team2=team2_name))
+        print(team1_name, team2_name, match_id, match_url)
 
         ActionChains(driver) \
             .click(match) \
             .perform()
         driver.execute_script(f"window.scrollTo(0, {offset})")
         offset += 50
-    # print("all is opened")
-
-
-def get_match_id_from_url(match_url):
-    spl = match_url.split('/')
-    i1 = spl.index('#')
-    return spl[i1 - 1]
+    print("all is opened")
 
 
 async def check_matches_for_needed_stat():
@@ -129,7 +152,7 @@ async def check_matches_for_needed_stat():
             except ValueError:
                 continue
 
-            match_db.write_new_match(match_id=match_id)
+            # match_db.write_new_match(match_id=match_id)
 
             ans = test(driver, match_id, match_url)
 
@@ -141,24 +164,31 @@ async def check_matches_for_needed_stat():
             elif ans is None:
                 match_db.delete_row_by_id(match_id=match_id)
             elif isinstance(ans, ChannelAnswerType):
-                # print('Я очень хотел отправит это сообщение', ans)
                 await send_forecast_to_channel(ans)
                 driver.close()
-        now_unix = time.time()
-        if len(driver.window_handles) == 1 or now_unix - start_unix >= 5 * 60:
-            print("Нет открытых матчей или статистика пока не обновилась")
-            time.sleep(60 * random.randint(4, 6))
+                match_db.update_status(MatchStat(match_id=match_id, status='nostat'))
+        if len(driver.window_handles) == 1:
+            print("Нет открытых матчей")
             driver.switch_to.window(original_window)
             open_countries()
             open_every_match()
-            start_unix = now_unix
+            try:
+                delete_past_rows(driver)
+            except Exception:
+                print("cant delete old rows")
+        if time.time() - start_unix >= 3 * 60:
+            open_every_match()
+            start_unix = time.time()
 
 
 def test(driver, match_id, match_url) -> str | None | ChannelAnswerType:
     '''
     asking page with match and returning statistic
     '''
-    f = 0
+    statistic_button = 0
+    # if DEBUG:
+    # with open(f"logs/log_{match_id}_{time.strftime('%m_%d-%H_%M_%S', time.localtime())}.txt", mode='w+',
+    #           encoding='utf-8') as log_file_writer:
     status = match_db.return_status_by_id(match_id)
     if status == "nostat":
         return "skip_window"
@@ -176,29 +206,37 @@ def test(driver, match_id, match_url) -> str | None | ChannelAnswerType:
                 ActionChains(driver) \
                     .click(button) \
                     .perform()
-                f = 1
+                statistic_button = 1
                 break
     except Exception as ex:
-        match_db.update_status(MatchStat(match_id=match_id, status='wait_for_stat'))
-        print("cant find button <Статистика>")
+        driver.close()
+        match_db.update_status(MatchStat(match_id=match_id, status='nostat'))
+        if DEBUG:
+            log_file_writer.write("cant find button <Статистика>\n")
+            print("cant find button <Статистика>")
 
-    if f == 0:
+    if statistic_button == 0:
         # match without statistic
         driver.close()
         match_db.update_status(
             MatchStat(match_id=match_id, status="nostat")
         )
+        if DEBUG:
+            log_file_writer.write("cant find button <Статистика>\n")
         return None
     soup = BeautifulSoup(driver.page_source, 'lxml')
-    match_db.update_status(MatchStat(match_id=match_id, status='wait_for_stat'))
+    # match_db.update_status(MatchStat(match_id=match_id, status='getting_stat_from_table'))
     team1_name = team2_name = ''
     try:
         block_with_team_names = soup.find('div', class_='duelParticipant')
         team1, team2 = block_with_team_names.find_all('a', class_='participant__participantName')
         team1_name = team1.text
         team2_name = team2.text
+        """update data"""
         match_db.write_data(MatchRow(team1=team1_name, team2=team2_name, match_id=match_id, match_url=match_url))
     except Exception as ex:
+        if DEBUG:
+            log_file_writer.write(f"cant find names of teams {ex}\n")
         print("cant find names of teams", ex)
 
     # saving first time statistic
@@ -210,12 +248,18 @@ def test(driver, match_id, match_url) -> str | None | ChannelAnswerType:
             match_db.first_time_update_data(
                 MatchStat(team1_count=team1_count, team2_count=team2_count, status='first_time_stat',
                           match_id=match_id))
+
     except Exception as ex:
+        if DEBUG:
+            log_file_writer.write(f"error in soup find перерыв {ex}\n")
         print('error in soup find перерыв', ex)
     try:
         match_country, championship = soup.find('span', class_='tournamentHeader__country').text.split(':')
     except Exception as ex:
         print("cant find match_country and championship", ex)
+        if DEBUG:
+            log_file_writer.write(f"cant find match_country and championship {ex}\n")
+
     soup = BeautifulSoup(driver.page_source, 'lxml')
     try:
         now_match_time = driver.find_element(By.CLASS_NAME, 'eventTime').text
@@ -225,7 +269,9 @@ def test(driver, match_id, match_url) -> str | None | ChannelAnswerType:
             now_match_time = soup.find('span', class_='eventTime').text
         except Exception as ex:
             print("Не удалось найти время вторым способом")
-        match_db.update_status(MatchStat(match_id=match_id, status="cant_find_match_minute"))
+            if DEBUG:
+                log_file_writer.write(f"Не удалось найти время вторым способом{ex}\n")
+        # match_db.update_status(MatchStat(match_id=match_id, status="cant_find_match_minute"))
         return "skip_window"
 
     second_time: bool = False
@@ -244,6 +290,8 @@ def test(driver, match_id, match_url) -> str | None | ChannelAnswerType:
                 try:
                     team1_count, team2_count = map(int, now_team_count.text.split('-'))
                 except Exception as ex:
+                    if DEBUG:
+                        log_file_writer.write(f"cant split score from second time {ex}\n")
                     print("cant split score from second time", ex)
                 break
             elif button.text == '1-Й ТАЙМ':
@@ -254,19 +302,29 @@ def test(driver, match_id, match_url) -> str | None | ChannelAnswerType:
                 now_team_count = soup.find('div', class_='detailScore__wrapper')
                 try:
                     team1_count, team2_count = map(int, now_team_count.text.split('-'))
+                    match_db.update_status(
+                        MatchStat(match_id=match_id, status='now_first_time', team1_count=team1_count,
+                                  team2_count=team2_count))
                 except Exception as ex:
+                    if DEBUG:
+                        log_file_writer.write(f"cant split score from first time {ex}\n")
                     print("cant split teams score from first time", ex)
         except Exception as ex:
             print("cant find <1-й ТАЙМ> or <2-й ТАЙМ>", ex)
         time.sleep(0.25)
     team1_first_count, team2_first_count = 0, 0
-    if second_time:
-        team1_first_count, team2_first_count = map(int, match_db.get_first_time_stat(match_id=match_id))
+    try:
+        if second_time:
+            team1_first_count, team2_first_count = map(int, match_db.get_first_time_stat(match_id=match_id))
+    except TypeError:
+        team1_first_count, team2_first_count = 0, 0
+        if DEBUG:
+            log_file_writer.write("нет информации по первому тайму\n")
+        print("no info about first time")
 
-    ## filtering statistics
     # finding stat table
-    # s = soup.find('div', class_='section')
     print("Перехожу к сбору данных из таблички")
+    # log_file_writer.write("Перехожу к сбору данных из таблички\n")
     team1_xg = team1_danger = 0
     team2_xg = team2_danger = 0
     soup = BeautifulSoup(driver.page_source, 'lxml')
@@ -278,7 +336,7 @@ def test(driver, match_id, match_url) -> str | None | ChannelAnswerType:
             name_stat = split_row.group(2)
             team2_stat = split_row.group(3)
         except AttributeError:
-            match_db.update_status(MatchStat(match_id=match_id, status="wait for xG"))
+            # match_db.update_status(MatchStat(match_id=match_id, status="wait for xG"))
             return "skip_window"
 
         if name_stat == 'Ожидаемые голы (xG)':  # get xG
@@ -296,8 +354,16 @@ def test(driver, match_id, match_url) -> str | None | ChannelAnswerType:
         return "skip_window"
     team1_X = (team1_xg + team1_danger / 100) - (team1_count - team1_first_count)
     team2_X = (team2_xg + team2_danger / 100) - (team2_count - team2_first_count)
-    print(team1_X, team2_X, team1_name, team2_name, match_url)
+    if DEBUG:
+        log_file_writer.write(
+            f'"<team1>", {team1_xg}, {team1_danger},минута матча: {now_match_time}, сейчас:{team1_count}, "первый тайм:"{team1_first_count}\n')
+        log_file_writer.write(f'"<team2>", {team2_xg}, {team2_danger}, {team2_count}, {team2_first_count}\n')
+        log_file_writer.write(f'{team1_X}, {team2_X}, {team1_name}, {team2_name}, {match_url}\n')
+        print("<team1>", team1_xg, team1_danger, team1_count, team1_first_count)
+        print("<team2>", team2_xg, team2_danger, team2_count, team2_first_count)
+        print(team1_X, team2_X, team1_name, team2_name, match_url)
     if team1_X >= 1:
+        # match_db.delete_row_by_id(match_id)
         return ChannelAnswerType(country=match_country,
                                  championship=championship,
                                  team1=team1_name,
@@ -309,7 +375,7 @@ def test(driver, match_id, match_url) -> str | None | ChannelAnswerType:
                                  )
 
     elif team2_X >= 1:
-        driver.close()
+        # match_db.delete_row_by_id(match_id)
         return ChannelAnswerType(country=match_country,
                                  championship=championship,
                                  team1=team1_name,
